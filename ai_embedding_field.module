@@ -1,0 +1,123 @@
+<?php
+
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\node\NodeInterface;
+use Drupal\ai\OperationType\Embeddings\EmbeddingsInput;
+
+/**
+ * Implements hook_entity_presave().
+ */
+function ai_embedding_field_entity_presave(EntityInterface $entity) {
+  if (!$entity instanceof NodeInterface) {
+    return;
+  }
+
+  foreach ($entity->getTranslationLanguages() as $langcode => $language) {
+    $translated = $entity->getTranslation($langcode);
+
+    foreach ($translated->getFields() as $field_name => $field_item_list) {
+      $field_def = $field_item_list->getFieldDefinition();
+      if ($field_def->getType() !== 'ai_embedding_field') {
+        continue;
+      }
+
+      $use_gzip = !empty($field_def->getSetting('gzip_embedding'));
+
+      // Render the content for embedding using view mode.
+      $text = ai_embedding_field_render_embedding_input($translated, $langcode);
+      if ($text === '') {
+        continue;
+      }
+
+      file_put_contents('/tmp/embedding_debug.log', "Embedding input for node {$entity->id()} ($langcode): $text\n", FILE_APPEND);
+      $vector = ai_embedding_field_generate_embedding($text);
+      if (empty($vector)) {
+        continue;
+      }
+
+      $json = json_encode($vector);
+      $stored = $use_gzip ? base64_encode(gzencode($json)) : $json;
+      $translated->set($field_name, $stored);
+    }
+  }
+}
+
+/**
+ * Generates an embedding using the AI module.
+ */
+function ai_embedding_field_generate_embedding(string $text): array {
+  try {
+    /** @var \Drupal\ai\AiProviderPluginManager $provider_manager */
+    $provider_manager = \Drupal::service('ai.provider');
+    $sets = $provider_manager->getDefaultProviderForOperationType('embeddings');
+
+    if (empty($sets['provider_id']) || empty($sets['model_id'])) {
+      file_put_contents('/tmp/embedding_debug.log', "No embedding provider/model set in AI module.\n", FILE_APPEND);
+      return [];
+    }
+
+    $provider = $provider_manager->createInstance($sets['provider_id']);
+
+    $input = new EmbeddingsInput();
+    $input->setPrompt($text);
+
+    $response = $provider->embeddings($input, $sets['model_id'], ['ai_embedding_field']);
+
+    return $response ? array_map('floatval', $response->getNormalized()) : [];
+  }
+  catch (\Exception $e) {
+    file_put_contents('/tmp/embedding_debug.log', "Embedding API error: " . $e->getMessage() . "\n", FILE_APPEND);
+    return [];
+  }
+}
+
+/**
+ * Renders the embedding input using the 'embedding_text' view mode.
+ */
+function ai_embedding_field_render_embedding_input(EntityInterface $entity, string $langcode): string {
+  $entity = $entity->hasTranslation($langcode)
+    ? $entity->getTranslation($langcode)
+    : $entity;
+
+  $view_builder = \Drupal::entityTypeManager()->getViewBuilder($entity->getEntityTypeId());
+  $render_array = $view_builder->view($entity, 'embedding_text', $langcode);
+  $renderer = \Drupal::service('renderer');
+  $rendered = $renderer->renderPlain($render_array);
+
+  return trim(strip_tags($rendered));
+}
+
+/**
+ * Get embedding vector from a node's first ai_embedding_field.
+ *
+ * @param \Drupal\node\NodeInterface $node
+ *   The node entity.
+ *
+ * @return float[]|null
+ *   The decoded embedding vector or NULL if none found or invalid.
+ */
+function ai_embedding_field_get_vector(NodeInterface $node): ?array {
+  foreach ($node->getFields() as $field_name => $items) {
+    $definition = $items->getFieldDefinition();
+    if ($definition->getType() === 'ai_embedding_field') {
+      $value = $items->value;
+      if (empty($value)) {
+        return null;
+      }
+
+      // Try base64 + gzdecode.
+      if (($decoded = base64_decode($value, true)) !== false) {
+        if (($json = @gzdecode($decoded)) !== false) {
+          $vector = json_decode($json, true);
+          return is_array($vector) ? array_map('floatval', $vector) : null;
+        }
+      }
+
+      // Fallback to plain JSON.
+      $vector = json_decode($value, true);
+      return is_array($vector) ? array_map('floatval', $vector) : null;
+    }
+  }
+
+  return null;
+}

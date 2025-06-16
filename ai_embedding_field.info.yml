@@ -1,0 +1,9 @@
+name: 'Embedding Field'
+type: module
+description: 'Provides a custom field type for OpenAI-style vector embeddings.'
+core_version_requirement: ^10
+package: Custom
+dependencies:
+  - field
+  - node
+  - ai

@@ -1,0 +1,7 @@
+field.field_settings.ai_embedding_field:
+  type: mapping
+  label: 'Embedding field settings'
+  mapping:
+    gzip_embedding:
+      type: boolean
+      label: 'Gzip the embedding JSON'

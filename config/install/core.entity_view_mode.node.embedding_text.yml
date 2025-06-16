@@ -1,0 +1,4 @@
+id: node.embedding_text
+label: 'Embedding text'
+targetEntityType: node
+status: true

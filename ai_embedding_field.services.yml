@@ -1,0 +1,6 @@
+services:
+  ai_embedding_field.autoload:
+    class: stdClass
+    autowire: false
+    autoconfigure: false
+    public: false
